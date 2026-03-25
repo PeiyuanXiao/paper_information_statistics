@@ -1,0 +1,37 @@
+# Paper structural summary
+Peiyuan
+
+## Project Introduction
+
+This project is designed to summarize statistical information from
+journal literature, such as page counts, main text word counts, word
+counts for different sections, the number of figures, tables, and
+citations. It provides a quick overview of the content and structural
+information of published literature within target journals.
+
+## The script features the following technical characteristics:
+
+- **Intelligent Positioning**: Automatically identifies core sections
+  such as `Introduction`, `Methods`, and `Results` using the
+  `try_locate` function.
+- **Text Cleaning**: The `dehydrate` function accurately removes
+  standalone figure captions and table title lines, ensuring that the
+  statistics reflect the pure main text word count.
+- **Structural Filtering**: Automatically excludes paper samples with
+  highly customized headings or non-standard structures through
+  `IsStandardStructure` logic.
+- **Citation Statistics**: Supports automatic counting of “Author-Year”
+  style references.
+
+## Quick Start
+
+### 1. Environment Requirements
+
+- **R** (\>= 4.0.0)
+- **Packages**: `pdftools`, `tidyverse`, `stringr`, `here`
+
+### 2. File Structure
+
+- Create a separate folder for the papers to be analyzed.
+- Run `paper_information_statistics.R`, using `here("")` to specify
+  relative paths.
