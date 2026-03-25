@@ -1,14 +1,15 @@
+install.packages(c("pdftools", "tidyverse", "here"))
 library(pdftools)
 library(tidyverse)
 library(stringr)
 library(here)
 
 # --- 1. 设置路径 ---
-pdf_folder <- here("JAMT_paper_sample")
+pdf_folder <- here("JAMT_paper_sample")  # 若有其他期刊则更改路径
+pdf_folder <- here("JAS_paper_sample")
 files <- list.files(pdf_folder, pattern = "\\.pdf$", full.names = TRUE)
 
 # --- 2. 辅助函数 ---
-
 count_words <- function(text) {
   if (is.na(text) || nchar(text) == 0) return(NA_integer_)
   str_count(text, "[A-Za-z]+")
