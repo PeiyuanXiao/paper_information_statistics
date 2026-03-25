@@ -1,7 +1,7 @@
 ---
 title: "Paper structural summary"
 author: "Peiyuan"
-format: html
+format: gfm
 editor: visual
 ---
 
