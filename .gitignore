@@ -2,6 +2,13 @@
 .Rhistory
 .RData
 .Ruserdata
+.Renviron
 JAMT_paper_sample/
 JAS_paper_sample/
 .pdf
+output/*.csv
+renv/binary/
+renv/cache/
+renv/index/
+renv/p3m/
+renv/projects
