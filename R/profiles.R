@@ -58,10 +58,32 @@ default_section_patterns <- function() {
   )
 }
 
+default_section_fallback_patterns <- function() {
+  list(
+    Methods = c(
+      "\\bCase\\s+Study.*Data\\s+and\\s+Methods?\\b",
+      "\\b\\d+(\\.\\d+)*\\.?\\s*Materials?\\s+and\\s+Methods?\\b",
+      "\\b\\d+(\\.\\d+)*\\.?\\s*Methods?\\s+and\\s+Materials?\\b",
+      "\\b\\d+(\\.\\d+)*\\.?\\s*Research\\s+Framework\\s+and\\s+Methodology\\b",
+      "\\b2(\\.\\d+)+\\.?\\s*.*\\b(raw\\s+material|materials?|sample|sampling|sample\\s+preparation|data|fieldwork|laboratory\\s+work|analysis|analytical|statistical|computational|processing|method)\\b"
+    ),
+    Results = c(
+      "\\bCase\\s+Study.*Results?\\s+and\\s+Discussion\\b",
+      "\\b\\d+(\\.\\d+)*\\.?\\s*Results?\\s+and\\s+Discussion\\b",
+      "\\b\\d+(\\.\\d+)*\\.?\\s*Results?\\b",
+      "\\b\\d+(\\.\\d+)*\\.?\\s*Results?\\s+and\\s+Analys(e|i)s\\b",
+      "\\b\\d+(\\.\\d+)*\\.?\\s*Results?\\s+and\\s+Assessment\\b",
+      "\\b\\d+(\\.\\d+)*\\.?\\s*.*\\b(chronotypology|typology|classification|model\\s+training|test\\s+cases)\\b",
+      "\\bAnalysis\\s+of\\s+(Neolithic|Later\\s+Neolithic|Post)"
+    )
+  )
+}
+
 make_profile <- function(name,
                          header_patterns = character(),
                          footer_patterns = character(),
                          section_patterns = default_section_patterns(),
+                         section_fallback_patterns = default_section_fallback_patterns(),
                          caption_drop_patterns = NULL,
                          max_section_chars = 100000) {
   list(
@@ -69,6 +91,7 @@ make_profile <- function(name,
     header_patterns = header_patterns,
     footer_patterns = footer_patterns,
     section_patterns = section_patterns,
+    section_fallback_patterns = section_fallback_patterns,
     caption_drop_patterns = caption_drop_patterns %||% c(
       "^\\s*Fig(?:ure)?\\.?\\s*\\d+[A-Za-z]?[.:]?.*$",
       "^\\s*Table\\s*\\d+[A-Za-z]?[.:]?.*$"

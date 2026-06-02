@@ -70,12 +70,14 @@ summary_metrics_overall <- summarise_metrics(results)
 summary_metrics_by_journal <- summarise_metrics(results, group_cols = "Journal")
 diagnostics <- build_diagnostics(results)
 heading_candidates <- build_heading_candidates(results)
+review_summary <- build_review_summary(diagnostics, heading_candidates)
 
 readr::write_csv(results, file.path(output_dir, "paper_metrics.csv"))
 readr::write_csv(summary_metrics_by_journal, file.path(output_dir, "summary_metrics_by_journal.csv"))
 readr::write_csv(summary_metrics_overall, file.path(output_dir, "summary_metrics_overall.csv"))
 readr::write_csv(diagnostics, file.path(output_dir, "diagnostics.csv"))
 readr::write_csv(heading_candidates, file.path(output_dir, "heading_candidates.csv"))
+readr::write_csv(review_summary, file.path(output_dir, "review_summary.csv"))
 
 cat(
   paste0(

@@ -83,6 +83,75 @@ try_locate_in_lines <- function(line_index, patterns) {
   empty_location()
 }
 
+try_locate_fallback_in_lines <- function(line_index,
+                                         patterns,
+                                         lower_bound = NA_integer_,
+                                         upper_bound = Inf,
+                                         profile = NULL,
+                                         max_line_chars = 240) {
+  if (length(patterns) == 0) return(empty_location())
+
+  squished_lines <- stringr::str_squish(line_index$line)
+  eligible <- line_index$line_start <= upper_bound &
+    nchar(squished_lines, type = "chars") <= max_line_chars
+
+  if (!is.na(lower_bound)) {
+    eligible <- eligible & line_index$line_start > lower_bound
+  }
+
+  if (!is.null(profile)) {
+    eligible <- eligible & !matches_any(squished_lines, profile$caption_drop_patterns)
+  }
+
+  for (pat in patterns) {
+    matches <- stringr::str_locate(
+      line_index$line,
+      stringr::regex(pat, ignore_case = TRUE)
+    )
+    idx <- which(eligible & !is.na(matches[, 1]))
+
+    if (length(idx) > 0) {
+      first_idx <- idx[[1]]
+      return(matrix(
+        c(
+          line_index$line_start[[first_idx]] + matches[first_idx, 1] - 1L,
+          line_index$line_start[[first_idx]] + matches[first_idx, 2] - 1L
+        ),
+        nrow = 1,
+        dimnames = list(NULL, c("start", "end"))
+      ))
+    }
+  }
+
+  empty_location()
+}
+
+first_section_start <- function(locations, sections, default = Inf) {
+  starts <- purrr::map_int(sections, \(section) loc_val(locations[[section]], 1, 1))
+  starts <- starts[!is.na(starts)]
+  if (length(starts) == 0) default else min(starts)
+}
+
+locate_last_reference_heading <- function(text) {
+  matches <- stringr::str_locate_all(
+    text,
+    stringr::regex("\\bReferences\\b", ignore_case = TRUE)
+  )[[1]]
+
+  if (nrow(matches) == 0) return(empty_location())
+
+  min_start <- nchar(text) * 0.45
+  candidates <- matches[matches[, 1] >= min_start, , drop = FALSE]
+  if (nrow(candidates) == 0) return(empty_location())
+
+  last_idx <- nrow(candidates)
+  matrix(
+    candidates[last_idx, ],
+    nrow = 1,
+    dimnames = list(NULL, c("start", "end"))
+  )
+}
+
 count_words <- function(text) {
   if (is.na(text) || nchar(text) == 0) return(NA_integer_)
   stringr::str_count(text, "\\b[[:alpha:]]+(?:[-'][[:alpha:]]+)?\\b")
@@ -117,6 +186,82 @@ drop_caption_lines <- function(text, profile) {
 locate_sections <- function(full_text, profile) {
   line_index <- build_line_index(full_text)
   purrr::map(profile$section_patterns, \(patterns) try_locate_in_lines(line_index, patterns))
+}
+
+infer_missing_section_locations <- function(full_text, locations, end_idx, profile) {
+  fallback_patterns <- profile$section_fallback_patterns %||% list()
+  if (length(fallback_patterns) == 0) return(locations)
+
+  line_index <- build_line_index(full_text)
+  warnings <- character()
+
+  if (is.na(loc_val(locations$Methods, 1, 1))) {
+    methods_upper <- first_section_start(
+      locations,
+      c("ResultsDiscussion", "Results", "DiscussionConclusion", "Discussion", "Conclusion", "References", "Appendix"),
+      default = end_idx
+    )
+    methods_lower <- first_non_missing(loc_val(locations$Introduction, 1, 2), 0L)
+    method_loc <- try_locate_fallback_in_lines(
+      line_index,
+      fallback_patterns$Methods %||% character(),
+      lower_bound = methods_lower,
+      upper_bound = min(methods_upper, end_idx, na.rm = TRUE),
+      profile = profile
+    )
+
+    if (!is.na(loc_val(method_loc, 1, 1))) {
+      locations$Methods <- method_loc
+      warnings <- c(warnings, "Methods inferred from numbered/topic heading")
+    }
+  }
+
+  if (is.na(loc_val(locations$ResultsDiscussion, 1, 1)) &&
+      is.na(loc_val(locations$Results, 1, 1))) {
+    results_lower <- first_non_missing(
+      loc_val(locations$Methods, 1, 2),
+      loc_val(locations$Introduction, 1, 2),
+      0L
+    )
+    results_upper <- first_section_start(
+      locations,
+      c("DiscussionConclusion", "Discussion", "Conclusion", "References", "Appendix"),
+      default = end_idx
+    )
+    results_discussion_patterns <- c(
+      profile$section_patterns$ResultsDiscussion %||% character(),
+      "\\b\\d+(\\.\\d+)*\\.?\\s+Results?\\s+and\\s+Discussion\\b",
+      "\\bCase\\s+Study.*Results?\\s+and\\s+Discussion\\b"
+    )
+    results_discussion_loc <- try_locate_fallback_in_lines(
+      line_index,
+      results_discussion_patterns,
+      lower_bound = results_lower,
+      upper_bound = min(results_upper, end_idx, na.rm = TRUE),
+      profile = profile
+    )
+
+    if (!is.na(loc_val(results_discussion_loc, 1, 1))) {
+      locations$ResultsDiscussion <- results_discussion_loc
+      warnings <- c(warnings, "Results and Discussion inferred from numbered/topic heading")
+    } else {
+      results_loc <- try_locate_fallback_in_lines(
+        line_index,
+        fallback_patterns$Results %||% character(),
+        lower_bound = results_lower,
+        upper_bound = min(results_upper, end_idx, na.rm = TRUE),
+        profile = profile
+      )
+
+      if (!is.na(loc_val(results_loc, 1, 1))) {
+        locations$Results <- results_loc
+        warnings <- c(warnings, "Results inferred from numbered/topic heading")
+      }
+    }
+  }
+
+  attr(locations, "warnings") <- warnings
+  locations
 }
 
 section_location_summary <- function(locations, end_idx = Inf) {
@@ -230,6 +375,25 @@ section_quality_warnings <- function(intro_words,
     as.character()
 }
 
+invalid_inferred_required_sections <- function(location_warnings,
+                                               methods_words,
+                                               results_words,
+                                               min_words = c(Methods = 50, Results = 50)) {
+  invalid <- character()
+
+  if (any(stringr::str_detect(location_warnings, "^Methods inferred")) &&
+      (is.na(methods_words) || methods_words < min_words[["Methods"]])) {
+    invalid <- c(invalid, "Methods")
+  }
+
+  if (any(stringr::str_detect(location_warnings, "^Results")) &&
+      (is.na(results_words) || results_words < min_words[["Results"]])) {
+    invalid <- c(invalid, "Results")
+  }
+
+  invalid
+}
+
 count_keywords <- function(keyword_text) {
   if (is.na(keyword_text) || nchar(stringr::str_trim(keyword_text)) == 0) {
     return(NA_integer_)
@@ -330,6 +494,8 @@ analyze_paper <- function(path, journal, profile) {
     na.rm = TRUE
   )
   locations <- trim_locations_to_body(raw_locations, end_idx)
+  locations <- infer_missing_section_locations(full_text, locations, end_idx, profile)
+  location_warnings <- attr(locations, "warnings") %||% character()
 
   section_result <- extract_section_words(full_text, locations, end_idx, profile)
   section_words <- section_result$words
@@ -352,11 +518,16 @@ analyze_paper <- function(path, journal, profile) {
     loc_val(locations$Keywords, 1, 2),
     first_non_missing(loc_val(locations$Introduction, 1, 1), end_idx)
   )
+  reference_location <- raw_locations$References
+  if (is.na(loc_val(reference_location, 1, 1))) {
+    reference_location <- locate_last_reference_heading(full_text)
+  }
+
   ref_text <- extract_between(
     full_text,
-    loc_val(raw_locations$References, 1, 2),
+    loc_val(reference_location, 1, 2),
     first_after(
-      loc_val(raw_locations$References, 1, 2),
+      loc_val(reference_location, 1, 2),
       loc_val(raw_locations$Appendix, 1, 1),
       nchar(full_text)
     )
@@ -371,13 +542,17 @@ analyze_paper <- function(path, journal, profile) {
   missing_required <- c(
     if (is.na(intro_words)) "Introduction",
     if (is.na(methods_words)) "Methods",
-    if (is.na(results_words)) "Results"
-  )
+    if (is.na(results_words)) "Results",
+    invalid_inferred_required_sections(location_warnings, methods_words, results_words)
+  ) |>
+    unique()
   n_references <- count_references(ref_text)
   is_standard_structure <- length(missing_required) == 0
   section_warning_text <- paste(
     c(
+      location_warnings,
       section_result$warnings,
+      if (is.na(n_references)) "References missing" else character(),
       section_quality_warnings(
         intro_words,
         methods_words,
@@ -543,6 +718,59 @@ build_diagnostics <- function(results) {
     )))
 }
 
+is_probable_heading <- function(lines) {
+  numbered_heading <- stringr::str_detect(
+    lines,
+    "^\\d+(\\.\\d+)*\\.?\\s+[[:upper:]][^;]{0,110}$"
+  )
+
+  known_heading <- stringr::str_detect(lines, stringr::regex(
+    paste(c(
+      "^Abstract\\b",
+      "^A\\s+B\\s+S\\s+T\\s+R\\s+A\\s+C\\s+T\\b",
+      "^A\\s+R\\s+T\\s+I\\s+C\\s+L\\s+E\\s+I\\s+N\\s+F\\s+O\\s+A\\s+B\\s+S\\s+T\\s+R\\s+A\\s+C\\s+T\\b",
+      "^Keywords?\\b",
+      "^Introduction\\b",
+      "^Background\\b",
+      "^Materials?\\b",
+      "^Methods?\\b",
+      "^Results?\\b",
+      "^Discussion\\b",
+      "^Conclusions?\\b",
+      "^References\\b",
+      "^Appendix\\b"
+    ), collapse = "|"),
+    ignore_case = TRUE
+  ))
+
+  topic_heading <- stringr::str_detect(lines, stringr::regex(
+    "\\b(method|material|sample|data|analysis|result|assessment|discussion|conclusion|model|study|case|context|framework|protocol|experiment|chronolog|setting|background)\\b",
+    ignore_case = TRUE
+  )) &
+    stringr::str_detect(lines, "^[[:upper:]][[:alnum:][:space:][:punct:]]+$") &
+    stringr::str_count(lines, "\\b[[:alpha:]]+\\b") <= 12
+
+  bad_fragment <- stringr::str_detect(lines, stringr::regex(
+    paste(c(
+      "^\\d+\\s+Page\\s+\\d+\\s+of\\s+\\d+",
+      "^Extended\\s+author\\s+information\\b",
+      "^Declaration\\s+of\\s+competing\\s+interest",
+      "^Authors?\\s+and\\s+Affiliations\\b",
+      "\\bUniversity\\b",
+      "\\bInstitute\\b",
+      "\\bDepartment\\b",
+      "\\bhttps?://",
+      "^Cal,Qz\\b",
+      "^Clay,Qz\\b",
+      "^Ti\\s+V\\s+Cr\\s+Ga\\s+Sr\\b",
+      "^[[:upper:][:space:],]+$"
+    ), collapse = "|"),
+    ignore_case = TRUE
+  ))
+
+  (numbered_heading | known_heading | topic_heading) & !bad_fragment
+}
+
 extract_heading_candidates <- function(path, journal, max_line_chars = 120) {
   tryCatch({
     pages_txt <- pdftools::pdf_text(path)
@@ -552,11 +780,7 @@ extract_heading_candidates <- function(path, journal, max_line_chars = 120) {
       lines <- stringr::str_squish(lines)
       lines <- lines[nchar(lines) > 0 & nchar(lines) <= max_line_chars]
 
-      heading_like <- stringr::str_detect(lines, "^\\d+(\\.\\d+)*\\.?\\s+\\S+") |
-        stringr::str_detect(lines, "^[[:upper:]][[:alpha:] /,()\\-&:]+$") |
-        stringr::str_detect(lines, "^(Abstract|Keywords?|Introduction|Background|Materials?|Methods?|Results?|Discussion|Conclusions?|References|Appendix)\\b")
-
-      lines <- lines[heading_like]
+      lines <- lines[is_probable_heading(lines)]
       lines <- lines[
         !stringr::str_detect(lines, "^\\d+$") &
           !stringr::str_detect(lines, stringr::regex("^https?://|^doi:|journal of|contents lists", ignore_case = TRUE))
@@ -597,4 +821,31 @@ build_heading_candidates <- function(results) {
     review_results,
     function(SourcePath, Journal) extract_heading_candidates(SourcePath, Journal)
   )
+}
+
+build_review_summary <- function(diagnostics, heading_candidates, max_headings = 18) {
+  if (nrow(diagnostics) == 0) {
+    return(tibble::tibble())
+  }
+
+  candidate_summary <- heading_candidates |>
+    dplyr::distinct(.data$FileName, .data$CandidateHeading, .keep_all = TRUE) |>
+    dplyr::group_by(.data$FileName) |>
+    dplyr::summarise(
+      CandidateHeadings = paste(utils::head(.data$CandidateHeading, max_headings), collapse = " | "),
+      .groups = "drop"
+    )
+
+  diagnostics |>
+    dplyr::left_join(candidate_summary, by = "FileName") |>
+    dplyr::select(dplyr::all_of(c(
+      "FileName",
+      "Journal",
+      "IsStandardStructure",
+      "MissingRequiredSections",
+      "SectionWarnings",
+      "CandidateHeadings",
+      "ErrorMessage",
+      "SourcePath"
+    )))
 }
